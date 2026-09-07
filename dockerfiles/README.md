@@ -105,6 +105,13 @@ The active build workflow is
 - `halo-runtime` assembles only `vllm-rocm-halo` and always uses `--no-latest`;
   promote its digest only after real-device validation.
 
+GitHub schedules can start late, and a complete build can cross UTC midnight.
+Use the workflow's release date when checking dated tags; the wall-clock date at
+the end of the job may be different. Before starting a benchmark, verify that no
+image job is still moving `latest`. The benchmark runner refreshes mutable tags
+between units, so overlapping image publication can mix digests in one result
+date.
+
 The benchmark workflow is separate:
 [`../.github/workflows/bench-batch.yml`](../.github/workflows/bench-batch.yml).
 Building an image does not prove that it works on the target GPU.

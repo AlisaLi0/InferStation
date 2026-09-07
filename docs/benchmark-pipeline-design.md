@@ -94,9 +94,17 @@ result must record the immutable manifest digest actually pulled by the runner.
 The engine's self-reported version complements the digest; it does not replace
 it.
 
-The scheduled build and benchmark use the same UTC date. This lets the benchmark
-select the image set produced earlier in that release window without a
-cross-midnight naming ambiguity.
+The scheduled build and benchmark are intended to use the same release window,
+but a long build can cross UTC midnight. Derive dated-tag verification from the
+workflow's release date, not from `date -u` at the end of the job. A verifier
+that uses its finish date can falsely report missing tags even when every build
+job succeeded.
+
+Do not start a benchmark while a workflow that publishes mutable `latest` tags
+is still running. The batch runner refreshes mutable tags between units, so an
+overlap can mix image digests inside one measurement date. Either wait for image
+publication and verification to finish, or pin each backend image to one digest
+for the entire benchmark job.
 
 ### 3. Plan and shard a benchmark run
 
@@ -124,6 +132,21 @@ client, write the record, and remove the container.
 Runner owners must keep the selected accelerator free of unrelated workloads.
 A structurally valid JSON record can still be unusable if another process shared
 the device during measurement.
+
+Isolation checks must cover more than the current container list:
+
+- enumerate accelerator clients (`nvidia-smi`, `rocm-smi`, and `/dev/kfd`
+  owners) and map each PID to its cgroup or container;
+- detect host processes and stopped containers that an interactive session or
+  restart policy can relaunch during a long run; and
+- on unified-memory systems, check host memory, swap, and unattached shared
+  memory segments before accepting results.
+
+If exclusivity cannot be maintained for the full measurement window, postpone
+the shard. A periodic process or container guard is not proof of isolation: it
+leaves a race window in which a relaunched workload can touch the accelerator.
+Use it only as an alerting or containment aid, never as the acceptance basis for
+a published performance run.
 
 ### 5. Publish results incrementally
 
@@ -161,6 +184,8 @@ shard complete, verify all of the following:
 7. Same-configuration performance is checked against recent history. Large
    regressions are re-measured before publication rather than silently accepted
    or deleted.
+8. Each host/backend group uses one expected image digest for the measurement
+  window, and every accepted record points to the intended Actions run.
 
 Compare performance only when the hardware identity, scenario, engine, and image
 provenance are compatible. A changed image digest is a new software point, not a
@@ -176,7 +201,14 @@ strict apples-to-apples regression sample.
 | Benchmark process is interrupted | Validate completed local records, then either publish them or remove them before the next checkout. |
 | Git push conflicts | Fetch and reconcile; preserve all non-conflicting generated records. |
 | External accelerator workload is detected | Stop or postpone the shard and re-run measurements that may overlap. |
-| One scenario fails transiently | Retry the smallest exact filter with the original `run_date`; verify that the dry-run plan contains the intended entry. |
+| Mutable image tag changes during a run | Cancel the run, remove records from the mixed window, wait for publication to finish, and restart with stable digests. |
+| Canceled run publishes a delayed batch | Remove only records whose `log_url` proves they came from that canceled run before any date-resume recovery. |
+| One scenario fails transiently | Retry the original matrix shard with the original `run_date` and `resume_existing=date`; verify that the dry-run plan contains only the intended missing entry. |
+
+`runner_label` forces an unsharded plan. Do not use it to recover one Spark or
+Halo shard unless the filter is also narrow enough to select exactly the desired
+records. Prefer the original target matrix and shard assignment for date-resume
+recovery.
 
 A recovery is complete only when the repository result count, runner worktree,
 running containers, and Actions state agree. Do not infer completion from any one
